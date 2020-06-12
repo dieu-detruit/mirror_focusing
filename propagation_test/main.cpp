@@ -52,7 +52,7 @@ int main()
         for (auto [x, y, d] : Grid::zip(diffraction.lines(), diffraction)) {
             for (auto [xi, eta, a] : Grid::zip(aperture.lines(), aperture)) {
                 Length r = std::hypot(x - xi, y - eta, z);
-                d += z / r / r * aperture_wave * std::exp(-1.0i * k * r) / 1.0i / lambda * diffraction_pixel_area;
+                d += z / r / r * aperture_wave * std::exp(1.0i * k * r) / 1.0i / lambda * diffraction_pixel_area;
             }
         }
 
