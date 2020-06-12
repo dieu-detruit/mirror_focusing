@@ -1,0 +1,6 @@
+[submodule "external/grid"]
+	path = external/grid
+	url = https://github.com/dieu-detruit/grid.git
+[submodule "external/unit"]
+	path = external/unit
+	url = https://github.com/dieu-detruit/unit.git
