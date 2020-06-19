@@ -62,7 +62,7 @@ int main()
             Length z = i / 100.0 * mirror_offset_z;
 
             for (auto [x, y, o] : Grid::zip(onway.lines(), onway)) {
-                Length r = std::hypot(x, y, z);
+                Length r = std::hypot(x, y - source_d, z - source_z);
                 o = z / r / r * source * std::exp(1.0i * k * r) / 1.0i / lambda * source_area;
             }
 
@@ -95,11 +95,11 @@ int main()
         Length d_represent = 0.5 * (d - d_prev);
 
         Length z = parabola_z(d);
-        Length r = std::sqrt(d * d + z * z);
+        Length r = std::hypot(d - source_d, z);
 
         Eigen::Vector3d normal = parabola_unit_normal(d);
 
-        double cos = Eigen::Vector3d{d / 1.0_m, 0.0, z / 1.0_m}.dot(normal) / r * 1.0_m;
+        double cos = Eigen::Vector3d{(d - source_d) / 1.0_m, 0.0, z / 1.0_m}.dot(normal) / r * 1.0_m;
         double sin = std::sqrt(1.0 - cos * cos);
 
         Eigen::Matrix3d rotation = Eigen::AngleAxis<double>{theta_step, Eigen::Vector3d::UnitZ()}.toRotationMatrix();
@@ -184,15 +184,3 @@ int main()
 
     return 0;
 }
-
-/*
-fftw_plan plan = fftw_plan_dft_2d(detector_pixel_num, detector_pixel_num,
-                reinterpret_cast<fftw_complex*>(exit.data()), reinterpret_cast<fftw_complex*>(detected_known.data()),
-                FFTW_FORWARD, FFTW_ESTIMATE);
-            fftw_execute(plan);
-            fftw_destroy_plan(plan);
-*/
-
-/*
- * https://spatial.chat/s/Infomation-Somatics-Meetings-2020
- */

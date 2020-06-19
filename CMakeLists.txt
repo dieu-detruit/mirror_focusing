@@ -1,5 +1,8 @@
 cmake_minimum_required(VERSION 3.17)
 
+set(CMAKE_CXX_COMPILER "/usr/local/bin/g++-9" CACHE STRING "g++ compiler" FORCE)
+set(CMAKE_C_COMPILER "/usr/local/bin/gcc-9" CACHE STRING "gcc compiler" FORCE)
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
@@ -21,15 +24,12 @@ find_library (
     NO_DEFAULT_PATH # do not search system default paths
 )
 
+find_package(TBB REQUIRED)
+
 # find packages and include files
 find_package(Eigen3 REQUIRED)
 
-find_library(
-       OpenMP_LIB
-       NAMES omp libomp
-    )
-
-set(EXEC_NAMES parabola design_ringfocus propagation_test)
+set(EXEC_NAMES parabola design_ringfocus propagation_test ellipse plane test)
 
 foreach(EXEC_NAME ${EXEC_NAMES})
 
@@ -37,11 +37,12 @@ foreach(EXEC_NAME ${EXEC_NAMES})
     target_include_directories(${EXEC_NAME} PRIVATE
         ${FFTW3_INCLUDE_DIRS}
         ${EIGEN3_INCLUDE_DIRS}
+        /usr/local/Cellar/tbb/2020_U2/include
         external/grid/include
         external/unit/include
         )
     target_link_libraries(${EXEC_NAME}
-        ${FFTW3_LIB} ${FFTW3_THREAD_LIB} ${OpenMP_LIB}
+        ${FFTW3_LIB} ${FFTW3_THREAD_LIB} ${TBB_IMPORTED_TARGETS}
         )
 
     target_compile_options(${EXEC_NAME} PRIVATE
