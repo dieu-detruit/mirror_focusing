@@ -29,11 +29,34 @@ find_package(TBB REQUIRED)
 # find packages and include files
 find_package(Eigen3 REQUIRED)
 
-set(EXEC_NAMES parabola design_ringfocus propagation_test ellipse plane test)
+set(EXEC_NAMES parabola design_ringfocus propagation_test plane test)
 
 foreach(EXEC_NAME ${EXEC_NAMES})
 
     add_executable(${EXEC_NAME} ${EXEC_NAME}/main.cpp)
+    target_include_directories(${EXEC_NAME} PRIVATE
+        ${FFTW3_INCLUDE_DIRS}
+        ${EIGEN3_INCLUDE_DIRS}
+        /usr/local/Cellar/tbb/2020_U2/include
+        external/grid/include
+        external/unit/include
+        )
+    target_link_libraries(${EXEC_NAME}
+        ${FFTW3_LIB} ${FFTW3_THREAD_LIB} ${TBB_IMPORTED_TARGETS}
+        )
+
+    target_compile_options(${EXEC_NAME} PRIVATE
+            -g -O3 -Wfatal-errors)
+
+endforeach()
+
+## exec for ellipoidal mirror
+set(ELLIPSE_SRC_NAMES simple knifeedge_scan foucault_test)
+foreach(SRC_NAME ${ELLIPSE_SRC_NAMES})
+
+    set(EXEC_NAME "ellipse_${SRC_NAME}")
+
+    add_executable(${EXEC_NAME} ellipse/${SRC_NAME}.cpp)
     target_include_directories(${EXEC_NAME} PRIVATE
         ${FFTW3_INCLUDE_DIRS}
         ${EIGEN3_INCLUDE_DIRS}

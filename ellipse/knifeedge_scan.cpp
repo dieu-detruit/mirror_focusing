@@ -88,9 +88,12 @@ int main()
     }
     std::cout << "designed. size: " << ellipsoidal_mirror.size() << std::endl;
 
+    constexpr Angle yaw_dev = 0.0_rad;
     for (int i = 0; i < 20; ++i) {
         Angle pitch_dev = 1.0_mrad * i / 20.0;
-        Angle yaw_dev = 1.0_mrad * i / 20.0;
+        //Angle yaw_dev = 1.0_mrad * i / 20.0;
+
+        std::cout << "pitch_dev: " << pitch_dev << std::endl;
 
         // 角度誤差を与える
         std::vector<MicroArea> installed_mirror(ellipsoidal_mirror.size());
@@ -157,11 +160,11 @@ int main()
             const std::size_t size = installed_mirror.size();
             std::atomic_ulong c = 0;
 
-            auto zip = Grid::zip(ellipsoidal_mirror, mirror_wave, mirror_effective_dS);
+            auto zip = Grid::zip(installed_mirror, mirror_wave, mirror_effective_dS);
             std::for_each(std::execution::par, zip.begin(), zip.end(), [&c, &size, &focus_zip](auto x) {
                 auto [area, wave, dS] = x;
 
-                if (c++ % 1000 == 0) {
+                if (c++ % 10000 == 0) {
                     std::cout << c << " / " << size << std::endl;
                 }
 

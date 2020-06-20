@@ -32,8 +32,10 @@ inline constexpr WaveAmplitude source = 1.0 * amp_unit;
 inline constexpr Area source_area = 100.0_um2;
 inline constexpr Length source_z = -f;
 
-inline constexpr Length focus_length = 200.0_nm;
+inline constexpr Length focus_length = 300.0_nm;
 inline constexpr std::size_t focus_pixel_num = 256;
+
+inline constexpr Length exit_length = focus_pixel_num * lambda * WD / focus_length;
 
 inline constexpr Length detector_z = f + CD;
 inline constexpr Length detector_pixel_size = 15.0_um;
