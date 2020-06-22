@@ -139,9 +139,9 @@ int main()
     }
 
     // z=fでの反射光
+    Grid::DynamicRange<Length> focus_range{-0.5 * focus_length, 0.5 * focus_length, focus_pixel_num};
+    Grid::GridVector<Complex<WaveAmplitude>, Length, 2> focus{focus_range, focus_range};
     {
-        Grid::DynamicRange<Length> focus_range{-0.5 * focus_length, 0.5 * focus_length, focus_pixel_num};
-        Grid::GridVector<Complex<WaveAmplitude>, Length, 2> focus{focus_range, focus_range};
         focus.fill(0.0 * amp_unit);
 
         auto focus_zip = Grid::zip(focus.lines(), focus);
@@ -184,31 +184,31 @@ int main()
             }
             file << std::endl;
         }
-
-        // ミラー下流側開口面での波形を見る
-        Grid::DynamicRange<Length> exit_range{-0.5 * exit_length, 0.5 * exit_length, focus_pixel_num};
-        Grid::GridVector<Complex<WaveAmplitude>, Length, 2> exit{exit_range, exit_range};
-        fftw_plan plan
-            = fftw_plan_dft_2d(focus_pixel_num, focus_pixel_num,
-                reinterpret_cast<fftw_complex*>(focus.data()), reinterpret_cast<fftw_complex*>(exit.data()), FFTW_FORWARD, FFTW_ESTIMATE);
-        fftw_execute(plan);
-
-        Grid::fftshift(exit);
-
-        {
-            std::ofstream file("data_ellipse/exit.txt");
-            for (auto& x : exit.line(0)) {
-                for (auto& y : exit.line(1)) {
-                    file << x / 1.0_m << ' '
-                         << y / 1.0_m << ' '
-                         << std::arg(exit.at(x, y)) << ' '
-                         << std::norm(exit.at(x, y)).value << std::endl;
-                }
-                file << std::endl;
-            }
-        }
-        fftw_destroy_plan(plan);
     }
+
+    // ミラー下流側開口面での波形を見る
+    Grid::DynamicRange<Length> exit_range{-0.5 * exit_length, 0.5 * exit_length, focus_pixel_num};
+    Grid::GridVector<Complex<WaveAmplitude>, Length, 2> exit{exit_range, exit_range};
+    fftw_plan plan
+        = fftw_plan_dft_2d(focus_pixel_num, focus_pixel_num,
+            reinterpret_cast<fftw_complex*>(focus.data()), reinterpret_cast<fftw_complex*>(exit.data()), FFTW_FORWARD, FFTW_ESTIMATE);
+    fftw_execute(plan);
+
+    Grid::fftshift(exit);
+
+    {
+        std::ofstream file("data_ellipse/exit.txt");
+        for (auto& x : exit.line(0)) {
+            for (auto& y : exit.line(1)) {
+                file << x / 1.0_m << ' '
+                     << y / 1.0_m << ' '
+                     << std::arg(exit.at(x, y)) << ' '
+                     << std::norm(exit.at(x, y)).value << std::endl;
+            }
+            file << std::endl;
+        }
+    }
+    fftw_destroy_plan(plan);
 
     return 0;
 }

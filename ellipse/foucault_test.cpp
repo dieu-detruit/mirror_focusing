@@ -56,7 +56,7 @@ int main()
     std::vector<MicroArea> ellipsoidal_mirror;
     {
         constexpr Length dz = ML / 2400;
-        constexpr Angle droll = 2.0 * M_PI / 64.0 * 1.0_rad;
+        constexpr Angle droll = 2.0 * M_PI / 256.0 * 1.0_rad;
         auto zrange = Grid::arange(f - ML - WD, f - WD, dz);
         auto roll_range = Grid::arange(0.0_rad, 2.0 * M_PI * 1.0_rad, droll);
 
@@ -137,10 +137,18 @@ int main()
         });
     }
 
-    // z=fでの反射光
-    {
+
+    Grid::DynamicRange<Length> detector_range{-0.5 * detector_length, 0.5 * detector_length, detector_pixel_num};
+    Grid::GridVector<Complex<WaveAmplitude>, Length, 2> detector{detector_range, detector_range};
+
+    // z = f - 100nm, f, f + 100nm
+    for (auto& translate : {-100.0_nm, 0.0_nm, 100.0_nm}) {
+        Length knifeedge_z = f + translate;
+        Length knife_focus_length = detector_pixel_num * lambda * (CD - translate) / detector_length / 2;
+
         Grid::DynamicRange<Length> focus_range{-0.5 * focus_length, 0.5 * focus_length, focus_pixel_num};
         Grid::GridVector<Complex<WaveAmplitude>, Length, 2> focus{focus_range, focus_range};
+
         focus.fill(0.0 * amp_unit);
 
         auto focus_zip = Grid::zip(focus.lines(), focus);
@@ -148,7 +156,7 @@ int main()
         std::atomic_ulong c = 0;
 
         auto zip = Grid::zip(installed_mirror, mirror_wave, mirror_effective_dS);
-        std::for_each(std::execution::par, zip.begin(), zip.end(), [&c, &size, &focus_zip](auto x) {
+        std::for_each(std::execution::par, zip.begin(), zip.end(), [&c, &size, &focus_zip, &knifeedge_z](auto x) {
             auto [area, wave, dS] = x;
 
             if (c++ % 10000 == 0) {
@@ -157,52 +165,49 @@ int main()
 
             auto coef = wave * dS / 1.0i / lambda;
             for (auto [x, y, U] : focus_zip) {
-                Eigen::Vector3d r = Eigen::Vector3d{x / 1.0_m, y / 1.0_m, f / 1.0_m} - area.pos;
+                Eigen::Vector3d r = Eigen::Vector3d{x / 1.0_m, y / 1.0_m, knifeedge_z / 1.0_m} - area.pos;
                 auto r_squared_norm = r.squaredNorm() * 1.0_m2;
                 U += coef * r.dot(area.normal) * 1.0_m / r_squared_norm * std::exp(1.0i * k * std::sqrt(r_squared_norm));
             }
         });
 
+        for (auto& x : focus.line(0)) {
+            for (auto& y : focus.line(1)) {
+                if (x <= 0.0_nm) {
+                    focus.at(x, y) = 0.0 * amp_unit;
+                }
+            }
+        }
+
         {
-            std::ofstream file("data_ellipse/foucalt_test/focus_" + std::to_string(i) + ".txt");
+            std::ofstream file("data_foucaulttest_ellipse/obstructed_" + std::to_string(int(translate / 1.0_nm)) + ".txt");
+
             for (auto& x : focus.line(0)) {
                 for (auto& y : focus.line(1)) {
-                    file << x / 1.0_m << ' ' << y / 1.0_m << ' '
+                    file << x / 1.0_m << ' '
+                         << y / 1.0_m << ' '
                          << std::arg(focus.at(x, y)) << ' '
                          << std::norm(focus.at(x, y)).value << std::endl;
                 }
                 file << std::endl;
             }
         }
-        {
-            std::ofstream file("data_ellipse/dev_1mrad/focus_profile_" + std::to_string(i) + ".txt");
-            for (auto& x : focus.line(0)) {
-                file << x / 1.0_m << ' '
-                     << std::arg(focus.at(x, 0.0_mm)) << ' '
-                     << std::norm(focus.at(x, 0.0_mm)).value << std::endl;
-            }
-            file << std::endl;
-        }
 
-
-        // ミラー下流側開口面での波形を見る
-        Grid::DynamicRange<Length> exit_range{-0.5 * exit_length, 0.5 * exit_length, focus_pixel_num};
-        Grid::GridVector<Complex<WaveAmplitude>, Length, 2> exit{exit_range, exit_range};
         fftw_plan plan
             = fftw_plan_dft_2d(focus_pixel_num, focus_pixel_num,
-                reinterpret_cast<fftw_complex*>(focus.data()), reinterpret_cast<fftw_complex*>(exit.data()), FFTW_BACKWARD, FFTW_ESTIMATE);
-        fftw_execute(plan);
+                reinterpret_cast<fftw_complex*>(focus.data()), reinterpret_cast<fftw_complex*>(detector.data()), FFTW_BACKWARD, FFTW_ESTIMATE);
 
-        Grid::fftshift(exit);
+        fftw_execute(plan);
+        Grid::fftshift(detector);
 
         {
-            std::ofstream file("data_ellipse/exit.txt");
-            for (auto& x : exit.line(0)) {
-                for (auto& y : exit.line(1)) {
+            std::ofstream file("data_foucaulttest_ellipse/detected_" + std::to_string(int(translate / 1.0_nm)) + ".txt");
+            for (auto& x : detector.line(0)) {
+                for (auto& y : detector.line(1)) {
                     file << x / 1.0_m << ' '
                          << y / 1.0_m << ' '
-                         << std::arg(exit.at(x, y)) << ' '
-                         << std::norm(exit.at(x, y)).value << std::endl;
+                         << std::arg(detector.at(x, y)) << ' '
+                         << std::norm(detector.at(x, y)).value / (detector_pixel_num * detector_pixel_num) << std::endl;
                 }
                 file << std::endl;
             }

@@ -3,6 +3,7 @@
 #include <cmath>
 #include <complex>
 #include <execution>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 
@@ -47,6 +48,12 @@ auto ellipse_normal(const Length& z)
 
 int main()
 {
+
+    if (!fftw_init_threads()) {
+        std::cerr << "error at initialization of threads" << std::endl;
+        return 1;
+    }
+    fftw_plan_with_nthreads(4);
     Grid::parallelize();
 
     double NA;
@@ -56,7 +63,7 @@ int main()
     std::vector<MicroArea> ellipsoidal_mirror;
     {
         constexpr Length dz = ML / 2400;
-        constexpr Angle droll = 2.0 * M_PI / 64.0 * 1.0_rad;
+        constexpr Angle droll = 2.0 * M_PI / 128.0 * 1.0_rad;
         auto zrange = Grid::arange(f - ML - WD, f - WD, dz);
         auto roll_range = Grid::arange(0.0_rad, 2.0 * M_PI * 1.0_rad, droll);
 
@@ -89,11 +96,13 @@ int main()
     std::cout << "designed. size: " << ellipsoidal_mirror.size() << std::endl;
 
     constexpr Angle yaw_dev = 0.0_rad;
-    for (int i = 0; i < 20; ++i) {
-        Angle pitch_dev = 1.0_mrad * i / 20.0;
+    for (int i = 0; i <= 10; ++i) {
+        Angle pitch_dev = 1.0_urad * i / 10.0;
         //Angle yaw_dev = 1.0_mrad * i / 20.0;
 
         std::cout << "pitch_dev: " << pitch_dev << std::endl;
+
+        std::filesystem::create_directory("data_knifeedge_scan/dev_" + std::to_string(int(pitch_dev / 1.0_nrad)) + "nrad");
 
         // 角度誤差を与える
         std::vector<MicroArea> installed_mirror(ellipsoidal_mirror.size());
@@ -110,14 +119,9 @@ int main()
                 installed.normal = rotation * ideal.normal;
                 installed.dS = ideal.dS;
             });
-
-            //std::ofstream file("data_ellipse/dev_1mrad/installed.txt");
-            //for (auto& installed : installed_mirror) {
-            //file << installed.pos(0) << ' ' << installed.pos(1) << ' ' << installed.pos(2) << std::endl;
-            //}
         }
 
-        std::cout << "installed" << std::endl;
+        std::cout << "mirror installed" << std::endl;
 
         std::vector<Complex<WaveAmplitude>> mirror_wave(installed_mirror.size());
         std::vector<Area> mirror_effective_dS(installed_mirror.size());
@@ -137,29 +141,20 @@ int main()
                 dS = area.dS * grazing_sin;
             });
         }
-        //{
-        //std::ofstream file("data_ellipse/mirror_wave.txt");
-        //for (auto [area, wave] : Grid::zip(installed_mirror, mirror_wave)) {
-        //file << area.pos(0) << ' ' << area.pos(1) << ' ' << std::arg(wave) << ' ' << std::abs(wave).value << std::endl;
-        //}
-        //}
-        //{
-        //std::ofstream file("data_ellipse/effective_dS.txt");
-        //for (auto& dS : mirror_effective_dS) {
-        //file << dS << std::endl;
-        //}
-        //}
 
-        // z=fでの反射光
+        // z=fへの伝播
+
+        Length focus_y_dev = -(ML / 2 + WD) * pitch_dev;
+        Grid::DynamicRange<Length> focus_xrange{-0.5 * focus_length, 0.5 * focus_length, focus_pixel_num};
+        Grid::DynamicRange<Length> focus_yrange{focus_y_dev + -0.5 * focus_length, focus_y_dev + 0.5 * focus_length, focus_pixel_num};
+        Grid::GridVector<Complex<WaveAmplitude>, Length, 2> focus{focus_xrange, focus_yrange};
         {
-            Grid::DynamicRange<Length> focus_range{-0.5 * focus_length, 0.5 * focus_length, focus_pixel_num};
-            Grid::GridVector<Complex<WaveAmplitude>, Length, 2> focus{focus_range, focus_range};
             focus.fill(0.0 * amp_unit);
 
-            auto focus_zip = Grid::zip(focus.lines(), focus);
             const std::size_t size = installed_mirror.size();
             std::atomic_ulong c = 0;
 
+            auto focus_zip = Grid::zip(focus.lines(), focus);
             auto zip = Grid::zip(installed_mirror, mirror_wave, mirror_effective_dS);
             std::for_each(std::execution::par, zip.begin(), zip.end(), [&c, &size, &focus_zip](auto x) {
                 auto [area, wave, dS] = x;
@@ -177,7 +172,7 @@ int main()
             });
 
             {
-                std::ofstream file("data_ellipse/dev_1mrad/focus_" + std::to_string(i) + ".txt");
+                std::ofstream file("data_knifeedge_scan/dev_" + std::to_string(int(pitch_dev / 1.0_nrad)) + "nrad/focus.txt");
                 for (auto& x : focus.line(0)) {
                     for (auto& y : focus.line(1)) {
                         file << x / 1.0_m << ' ' << y / 1.0_m << ' '
@@ -187,41 +182,47 @@ int main()
                     file << std::endl;
                 }
             }
-            {
-                std::ofstream file("data_ellipse/dev_1mrad/focus_profile_" + std::to_string(i) + ".txt");
-                for (auto& x : focus.line(0)) {
-                    file << x / 1.0_m << ' '
-                         << std::arg(focus.at(x, 0.0_mm)) << ' '
-                         << std::norm(focus.at(x, 0.0_mm)).value << std::endl;
+
+            // ナイフエッジスキャン
+            std::vector<PhotonFluxDensity> profile;
+            Grid::GridVector<Complex<WaveAmplitude>, Length, 2> focus_obstruected{focus_xrange, focus_yrange};
+
+            Grid::DynamicRange<Length> detector_range{-0.5 * detector_length, 0.5 * detector_length, detector_pixel_num};
+            Grid::GridVector<Complex<WaveAmplitude>, Length, 2> detector{detector_range, detector_range};
+
+            fftw_plan plan
+                = fftw_plan_dft_2d(focus_pixel_num, focus_pixel_num,
+                    reinterpret_cast<fftw_complex*>(focus_obstruected.data()), reinterpret_cast<fftw_complex*>(detector.data()), FFTW_BACKWARD, FFTW_MEASURE);
+
+            auto edge_range = Grid::linspace(focus_y_dev - 3.0_um, focus_y_dev + 3.0_um, 200, true);
+            for (auto& edge_y : edge_range) {
+
+                for (auto [x, y, f, f_obstructed] : Grid::zip(focus.lines(), focus, focus_obstruected)) {
+                    if (y >= edge_y) {
+                        f_obstructed = 0.0 * amp_unit;
+                    } else {
+                        f_obstructed = f;
+                    }
                 }
-                file << std::endl;
+
+                fftw_execute(plan);
+
+                profile.emplace_back(std::transform_reduce(
+                    std::execution::par_unseq, detector.begin(), detector.end(), 0.0 * dens_unit,
+                    [](PhotonFluxDensity acc, PhotonFluxDensity v) { return acc + v; },
+                    [](Complex<WaveAmplitude> v) { return std::norm(v); }));
             }
 
-            // ミラー下流側開口面での波形を見る
-            //Grid::DynamicRange<Length> exit_range{-0.5 * exit_length, 0.5 * exit_length, focus_pixel_num};
-            //Grid::GridVector<Complex<WaveAmplitude>, Length, 2> exit{exit_range, exit_range};
-            //fftw_plan plan
-            //= fftw_plan_dft_2d(focus_pixel_num, focus_pixel_num,
-            //reinterpret_cast<fftw_complex*>(focus.data()), reinterpret_cast<fftw_complex*>(exit.data()), FFTW_BACKWARD, FFTW_ESTIMATE);
-            //fftw_execute(plan);
-
-            //Grid::fftshift(exit);
-
-            //{
-            //std::ofstream file("data_ellipse/exit.txt");
-            //for (auto& x : exit.line(0)) {
-            //for (auto& y : exit.line(1)) {
-            //file << x / 1.0_m << ' '
-            //<< y / 1.0_m << ' '
-            //<< std::arg(exit.at(x, y)) << ' '
-            //<< std::norm(exit.at(x, y)).value << std::endl;
-            //}
-            //file << std::endl;
-            //}
-            //}
-            //fftw_destroy_plan(plan);
+            {
+                std::ofstream file("data_knifeedge_scan/dev_" + std::to_string(int(pitch_dev / 1.0_nrad)) + "nrad/profile.txt");
+                for (auto [y, p] : Grid::zip(edge_range, profile)) {
+                    file << y.value << ' ' << p.value << std::endl;
+                }
+            }
+            fftw_destroy_plan(plan);
         }
     }
 
+    fftw_cleanup_threads();
     return 0;
 }
