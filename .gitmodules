@@ -4,3 +4,6 @@
 [submodule "external/unit"]
 	path = external/unit
 	url = https://github.com/dieu-detruit/unit.git
+[submodule "external/autodiff"]
+	path = external/autodiff
+	url = https://github.com/autodiff/autodiff.git

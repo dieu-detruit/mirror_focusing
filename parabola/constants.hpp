@@ -14,7 +14,7 @@ using WaveAmplitude = decltype(std::sqrt(PhotonFluxDensity{}));
 inline constexpr PhotonFluxDensity dens_unit{1.0};
 inline constexpr WaveAmplitude amp_unit{1.0};
 
-using WaveNumber = decltype(DimensionLessType{} / Length{});
+using WaveNumber = decltype(DimensionlessType{} / Length{});
 
 Length lambda = 10.0_nm;
 WaveNumber k = 2.0 * M_PI / lambda;

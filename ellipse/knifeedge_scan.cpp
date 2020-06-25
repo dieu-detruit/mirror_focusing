@@ -97,8 +97,8 @@ int main()
 
     constexpr Angle yaw_dev = 0.0_rad;
     for (int i = 0; i <= 10; ++i) {
-        Angle pitch_dev = 1.0_urad * i / 10.0;
-        //Angle yaw_dev = 1.0_mrad * i / 20.0;
+        //Angle pitch_dev = 1.0_urad * i / 10.0;
+        Angle pitch_dev = 1.0_mrad * i / 10.0;
 
         std::cout << "pitch_dev: " << pitch_dev << std::endl;
 
@@ -134,8 +134,8 @@ int main()
                 Eigen::Vector3d r = area.pos - Eigen::Vector3d{0.0, 0.0, source_z / 1.0_m};
                 Length r_length = r.norm() * 1.0_m;
 
-                wave = r(2) / (r_length / 1.0_m) / r_length
-                       * std::exp(1.0i * k * r_length) * source * source_area / 1.0i / lambda;
+                wave = r(2) * 1.0_m2 / (r_length * r_length)
+                       * std::exp(1.0i * k * r_length) * source * source_area_sqrt / 1.0i / lambda;
 
                 double grazing_sin = 1.0;
                 dS = area.dS * grazing_sin;
@@ -172,7 +172,7 @@ int main()
             });
 
             {
-                std::ofstream file("data_knifeedge_scan/dev_" + std::to_string(int(pitch_dev / 1.0_nrad)) + "nrad/focus.txt");
+                std::ofstream file("data_knifeedge_scan/dev_" + std::to_string(int(pitch_dev / 1.0_urad)) + "urad/focus.txt");
                 for (auto& x : focus.line(0)) {
                     for (auto& y : focus.line(1)) {
                         file << x / 1.0_m << ' ' << y / 1.0_m << ' '
@@ -214,7 +214,7 @@ int main()
             }
 
             {
-                std::ofstream file("data_knifeedge_scan/dev_" + std::to_string(int(pitch_dev / 1.0_nrad)) + "nrad/profile.txt");
+                std::ofstream file("data_knifeedge_scan/dev_" + std::to_string(int(pitch_dev / 1.0_urad)) + "urad/profile.txt");
                 for (auto [y, p] : Grid::zip(edge_range, profile)) {
                     file << y.value << ' ' << p.value << std::endl;
                 }

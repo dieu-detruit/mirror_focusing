@@ -33,7 +33,7 @@ int main()
     auto parabola_z = [](const Length& d) {
         return mirror_offset_z - 0.25 * d * d / p;
     };
-    auto parabola_arc_indefinite = [p = p / 1.0_m, rt_p = std::sqrt(p / 1.0_m)](const Length& d) -> Length {
+    auto parabola_arc_indefinite = [p = p / 1.0_m, rt_p = std::sqrt(p).value](const Length& d) -> Length {
         return 0.25 * d * std::sqrt(double(d * d / p / 1.0_m2) + 4.0) + rt_p * std::asinh(double(0.5 * d / rt_p / 1.0_m)) * 1.0_m;
     };
     auto parabola_unit_normal = [](const Length& d) {

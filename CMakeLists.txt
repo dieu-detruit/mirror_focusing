@@ -1,9 +1,9 @@
 cmake_minimum_required(VERSION 3.17)
 
-set(CMAKE_CXX_COMPILER "/usr/local/bin/g++-9" CACHE STRING "g++ compiler" FORCE)
-set(CMAKE_C_COMPILER "/usr/local/bin/gcc-9" CACHE STRING "gcc compiler" FORCE)
+set(CMAKE_CXX_COMPILER "/usr/local/bin/g++-10" CACHE STRING "g++ compiler" FORCE)
+set(CMAKE_C_COMPILER "/usr/local/bin/gcc-10" CACHE STRING "gcc compiler" FORCE)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 project(MIRROR_TEST LANGUAGES C CXX)
@@ -29,7 +29,7 @@ find_package(TBB REQUIRED)
 # find packages and include files
 find_package(Eigen3 REQUIRED)
 
-set(EXEC_NAMES parabola design_ringfocus propagation_test plane test)
+set(EXEC_NAMES parabola design_ringfocus propagation_test plane  test)
 
 foreach(EXEC_NAME ${EXEC_NAMES})
 
@@ -51,7 +51,7 @@ foreach(EXEC_NAME ${EXEC_NAMES})
 endforeach()
 
 ## exec for ellipoidal mirror
-set(ELLIPSE_SRC_NAMES simple knifeedge_scan foucault_test)
+set(ELLIPSE_SRC_NAMES simple knifeedge_scan foucault_test hybrid_propagation)
 foreach(SRC_NAME ${ELLIPSE_SRC_NAMES})
 
     set(EXEC_NAME "ellipse_${SRC_NAME}")
@@ -69,6 +69,6 @@ foreach(SRC_NAME ${ELLIPSE_SRC_NAMES})
         )
 
     target_compile_options(${EXEC_NAME} PRIVATE
-            -g -O3 -Wfatal-errors)
+            -g -O3)
 
 endforeach()

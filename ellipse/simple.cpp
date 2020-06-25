@@ -35,11 +35,11 @@ struct MicroArea {
         : pos(Eigen::Vector3d::Zero()), normal(Eigen::Vector3d::Zero()), dS(0.0_m2) {}
 };
 
-auto ellipse_radius(const Length& z)
+Length ellipse_radius(const Length& z)
 {
     return b * std::sqrt(1.0 - std::pow(z / a, 2));
 }
-auto ellipse_normal(const Length& z)
+Eigen::Vector3d ellipse_normal(const Length& z)
 {
     constexpr double coef = b * b / (a * a);
     return Eigen::Vector3d{0.0, 1.0, coef * z / ellipse_radius(z)}.normalized();
@@ -130,8 +130,8 @@ int main()
             Eigen::Vector3d r = area.pos - Eigen::Vector3d{0.0, 0.0, source_z / 1.0_m};
             Length r_length = r.norm() * 1.0_m;
 
-            wave = r(2) / (r_length / 1.0_m) / r_length
-                   * std::exp(1.0i * k * r_length) * source * source_area / 1.0i / lambda;
+            wave = r(2) * 1.0_m2 / (r_length) / r_length
+                   * std::exp(1.0i * k * r_length) * source * source_area_sqrt / 1.0i / lambda;
 
             double grazing_sin = 1.0;
             dS = area.dS * grazing_sin;
