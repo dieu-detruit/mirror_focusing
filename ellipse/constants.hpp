@@ -35,13 +35,13 @@ inline constexpr Length source_z = -f;
 
 inline constexpr Length detector_z = f + CD;
 inline constexpr Length detector_pixel_size = 15.0_um;
-inline constexpr std::size_t detector_pixel_num = 1024;
+inline constexpr std::size_t detector_pixel_num = 4096;
 inline constexpr Length detector_length = detector_pixel_size * detector_pixel_num;
 
-inline constexpr Length focus_length = detector_pixel_num * lambda * CD / detector_length / 2;
+inline constexpr Length focus_length = detector_pixel_num * lambda * CD / detector_length;
 inline constexpr std::size_t focus_pixel_num = detector_pixel_num;
 
-inline constexpr Length exit_length = focus_pixel_num * lambda * WD / focus_length / 2;
+inline constexpr Length exit_length = focus_pixel_num * lambda * WD / focus_length;
 
 
 }  // namespace Constants

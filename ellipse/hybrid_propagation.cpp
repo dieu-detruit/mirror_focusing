@@ -51,22 +51,29 @@ Eigen::Vector2d vectorize(Length x, Length y)
 
 int main()
 {
+    if (!fftw_init_threads()) {
+        std::cerr << "error at initialization of threads" << std::endl;
+        return 1;
+    }
+    fftw_plan_with_nthreads(4);
+
     Grid::parallelize();
 
     std::filesystem::create_directory(datadir);
+
+    constexpr Length focus_length = 200.0_nm;
+    constexpr Length exit_length = focus_pixel_num * lambda * WD / focus_length;
 
     Grid::DynamicRange<Length> exit_range{-0.5 * exit_length, 0.5 * exit_length, detector_pixel_num};
     Grid::GridVector<Complex<WaveAmplitude>, Length, 2> exit{exit_range, exit_range};
 
     Grid::GridVector<Eigen::Vector3d, Length, 2> reflect_points{exit_range, exit_range};
-    Grid::GridVector<Length, Length, 2> radius_map{exit_range, exit_range};
-    Grid::GridVector<Length, Length, 2> path_length_map{exit_range, exit_range};
 
     Eigen::Vector3d source_pos = vectorize(0.0_m, 0.0_m, -f);
     Eigen::Vector3d focus_pos = vectorize(0.0_m, 0.0_m, f);
 
-    constexpr double coef_0 = f * f / (a * a) - 1.0;
-    constexpr double coef_1 = -f * WD / (a * a);
+    constexpr double coef_0 = 1.0 - f * f / (a * a);
+    constexpr double coef_1 = f * WD / (a * a);
     constexpr double coef_1_sq = coef_1 * coef_1;
 
     std::cout << exit_radius << std::endl;
@@ -77,77 +84,40 @@ int main()
             if (std::abs(x) < std::abs(y)) {
                 exit.at(x, y) = exit.at(-std::abs(y), -std::abs(x));
                 reflect_points.at(x, y) = reflect_points.at(-std::abs(y), -std::abs(x));
-                reflect_points.at(x, y)(0) *= -(double)std::signbit(y);
-                reflect_points.at(x, y)(1) *= -(double)std::signbit(x);
-                radius_map.at(x, y) = radius_map.at(-std::abs(y), -std::abs(x));
-                path_length_map.at(x, y) = path_length_map.at(-std::abs(y), -std::abs(x));
             } else {
                 exit.at(x, y) = exit.at(-std::abs(x), -std::abs(y));
-                reflect_points.at(x, y)(0) *= -(double)std::signbit(x);
-                reflect_points.at(x, y)(1) *= -(double)std::signbit(y);
-                radius_map.at(x, y) = radius_map.at(-std::abs(x), -std::abs(y));
-                path_length_map.at(x, y) = path_length_map.at(-std::abs(x), -std::abs(y));
+                reflect_points.at(x, y) = reflect_points.at(-std::abs(x), -std::abs(y));
             }
             continue;
         }
 
         Length r = std::hypot(x, y);
-        radius_map.at(x, y) = r;
 
         if (r > exit_radius) {
             exit.at(x, y) = 0.0 * amp_unit;
             reflect_points.at(x, y) << 0.0, 0.0, 0.0;
-            radius_map.at(x, y) = 0.0_m;
-            path_length_map.at(x, y) = 0.0_m;
             continue;
         }
 
         Angle rotation = std::atan2(y, x);
 
         double coef_2 = WD * WD / (a * a) + r * r / (b * b);
-        double t = (-coef_1 + std::sqrt(coef_1_sq - coef_0 * coef_2)) / coef_2;
-        //Length path_length = 2.0 * a - std::hypot(WD, r);
-        Length path_length = std::hypot(f - t * WD - (f - WD), t * r - r) + std::hypot(-f - (f - t * WD), t * r);
-        path_length_map.at(x, y) = path_length;
-
-        //double grazing_sin = std::sqrt((1.0 + vectorize(t * WD, -t * r).dot(vectorize(2.0 * f - t * WD, -r))) / 2.0);
-        exit.at(x, y) = std::polar(source * source_area_sqrt / path_length, k * path_length);
+        double t = (coef_1 + std::sqrt(coef_1_sq + coef_0 * coef_2)) / coef_2;
+        Length path_length = t * std::hypot(WD, r) + std::hypot(2.0 * f - t * WD, t * r);
 
         Eigen::Vector3d reflect_pos = focus_pos + Eigen::AngleAxisd(rotation, Eigen::Vector3d::UnitZ()).toRotationMatrix() * vectorize(0.0_m, t * r, -t * WD);
 
         if (reflect_pos(2) * 1.0_m < f - WD - ML) {
             exit.at(x, y) = 0.0 * amp_unit;
             reflect_points.at(x, y) << 0.0, 0.0, 0.0;
-            radius_map.at(x, y) = 0.0_m;
-            path_length_map.at(x, y) = 0.0_m;
             continue;
         }
 
         reflect_points.at(x, y) = reflect_pos;
+        exit.at(x, y) = std::polar(source * source_area_sqrt / path_length, k * path_length);
     }
 
     print_field(exit, "nodev_exit.txt");
-
-    {
-        std::ofstream file(datadir + "/radius.txt");
-        for (auto& x : reflect_points.line(0)) {
-            for (auto& y : reflect_points.line(1)) {
-                file << x.value << ' ' << y.value << ' '
-                     << radius_map.at(x, y).value << std::endl;
-            }
-            file << std::endl;
-        }
-    }
-    {
-        std::ofstream file(datadir + "/path_length.txt");
-        for (auto& x : reflect_points.line(0)) {
-            for (auto& y : reflect_points.line(1)) {
-                file << x.value << ' ' << y.value << ' '
-                     << path_length_map.at(x, y).value << std::endl;
-            }
-            file << std::endl;
-        }
-    }
 
     {
         std::ofstream file(datadir + "/reflect_points.txt");
@@ -162,24 +132,25 @@ int main()
         }
     }
 
-    Grid::DynamicRange<Length> detector_range{-0.5 * detector_length, 0.5 * detector_length, detector_pixel_num};
-    Grid::GridVector<Complex<WaveAmplitude>, Length, 2> detector{detector_range, detector_range};
+    Grid::DynamicRange<Length> focus_range{-0.5 * focus_length, 0.5 * focus_length, detector_pixel_num};
+    Grid::GridVector<Complex<WaveAmplitude>, Length, 2> focus{focus_range, focus_range};
     {
         fftw_plan plan = fftw_plan_dft_2d(detector_pixel_num, detector_pixel_num,
-            reinterpret_cast<fftw_complex*>(exit.data()), reinterpret_cast<fftw_complex*>(detector.data()), FFTW_BACKWARD, FFTW_ESTIMATE);
+            reinterpret_cast<fftw_complex*>(exit.data()), reinterpret_cast<fftw_complex*>(focus.data()), FFTW_BACKWARD, FFTW_ESTIMATE);
 
         fftw_execute(plan);
 
-        Grid::fftshift(detector);
-        print_field(detector, "nodev_detector.txt");
+        Grid::fftshift(focus);
+        print_field(focus, "nodev_focus.txt");
     }
 
     {
         std::ofstream file(datadir + "/profile.txt");
-        for (auto& y : detector.line(1)) {
-            file << y.value << ' ' << std::norm(detector.at(0.0_m, y)).value << std::endl;
+        for (auto& y : focus.line(1)) {
+            file << y.value << ' ' << std::norm(focus.at(0.0_m, y)).value << std::endl;
         }
     }
 
+    fftw_cleanup_threads();
     return 0;
 }

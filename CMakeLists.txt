@@ -37,7 +37,6 @@ foreach(EXEC_NAME ${EXEC_NAMES})
     target_include_directories(${EXEC_NAME} PRIVATE
         ${FFTW3_INCLUDE_DIRS}
         ${EIGEN3_INCLUDE_DIRS}
-        /usr/local/Cellar/tbb/2020_U2/include
         external/grid/include
         external/unit/include
         )
