@@ -8,23 +8,10 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 project(MIRROR_TEST LANGUAGES C CXX)
 
-find_package(FFTW3 REQUIRED)
+include(external/wavefield/wavefield.cmake)
 
-find_library (
-    FFTW3_LIB
-    NAMES fftw3 libfftw3 # what to look for
-    HINTS ${FFTW3_LIBRARY_DIRS} # where to look
-    NO_DEFAULT_PATH # do not search system default paths
-)
-
-find_library (
-    FFTW3_THREAD_LIB
-    NAMES fftw3_threads libfftw3_threads # what to look for
-    HINTS ${FFTW3_LIBRARY_DIRS} # where to look
-    NO_DEFAULT_PATH # do not search system default paths
-)
-
-find_package(TBB REQUIRED)
+message("WAVEFIELD_INCLUDE_DIRS: ${WAVEFIELD_INCLUDE_DIRS}")
+message("WAVEFIELD_DEPENDENT_LIBS: ${WAVEFIELD_DEPENDENT_LIBS}")
 
 # find packages and include files
 find_package(Eigen3 REQUIRED)
@@ -35,13 +22,13 @@ foreach(EXEC_NAME ${EXEC_NAMES})
 
     add_executable(${EXEC_NAME} ${EXEC_NAME}/main.cpp)
     target_include_directories(${EXEC_NAME} PRIVATE
-        ${FFTW3_INCLUDE_DIRS}
         ${EIGEN3_INCLUDE_DIRS}
-        external/grid/include
+        ${WAVEFIELD_INCLUDE_DIRS}
         external/unit/include
+        external/autodiff
         )
     target_link_libraries(${EXEC_NAME}
-        ${FFTW3_LIB} ${FFTW3_THREAD_LIB} ${TBB_IMPORTED_TARGETS}
+        ${WAVEFIELD_DEPENDENT_LIBS}
         )
 
     target_compile_options(${EXEC_NAME} PRIVATE
@@ -57,14 +44,13 @@ foreach(SRC_NAME ${ELLIPSE_SRC_NAMES})
 
     add_executable(${EXEC_NAME} ellipse/${SRC_NAME}.cpp)
     target_include_directories(${EXEC_NAME} PRIVATE
-        ${FFTW3_INCLUDE_DIRS}
+        ${WAVEFIELD_INCLUDE_DIRS}
         ${EIGEN3_INCLUDE_DIRS}
-        /usr/local/Cellar/tbb/2020_U2/include
-        external/grid/include
         external/unit/include
+        external/autodiff
         )
     target_link_libraries(${EXEC_NAME}
-        ${FFTW3_LIB} ${FFTW3_THREAD_LIB} ${TBB_IMPORTED_TARGETS}
+        ${WAVEFIELD_DEPENDENT_LIBS}
         )
 
     target_compile_options(${EXEC_NAME} PRIVATE

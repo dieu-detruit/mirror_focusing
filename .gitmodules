@@ -7,3 +7,6 @@
 [submodule "external/autodiff"]
 	path = external/autodiff
 	url = https://github.com/autodiff/autodiff.git
+[submodule "external/wavefield"]
+	path = external/wavefield
+	url = https://github.com/dieu-detruit/wavefield.git

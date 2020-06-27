@@ -35,7 +35,7 @@ inline constexpr Length source_z = -f;
 
 inline constexpr Length detector_z = f + CD;
 inline constexpr Length detector_pixel_size = 15.0_um;
-inline constexpr std::size_t detector_pixel_num = 4096;
+inline constexpr std::size_t detector_pixel_num = 2048;
 inline constexpr Length detector_length = detector_pixel_size * detector_pixel_num;
 
 inline constexpr Length focus_length = detector_pixel_num * lambda * CD / detector_length;
