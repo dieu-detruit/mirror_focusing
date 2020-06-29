@@ -1,10 +1,10 @@
-#include <atomic>
 #include <cmath>
 #include <complex>
 #include <execution>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <numbers>
 #include <string>
 #include <vector>
 
@@ -19,12 +19,12 @@
 #include <unit/double.hpp>
 #include <unit/impl/std_overload.hpp>
 
-#include <wavefield/core.hpp>
-
 #include <grid/algorithm.hpp>
 #include <grid/bundle.hpp>
 #include <grid/core.hpp>
 #include <grid/linear.hpp>
+
+#include <wavefield/core.hpp>
 
 #include "constants.hpp"
 
@@ -74,8 +74,21 @@ int main()
 
     std::filesystem::create_directory(datadir);
 
+    // ミラー下流開口
     Grid::DynamicRange<Length> exit_range{-0.5 * exit_length, 0.5 * exit_length, detector_pixel_num};
     Grid::GridVector<Complex<WaveAmplitude>, Length, 2> exit{exit_range, exit_range};
+    Grid::GridVector<Complex<WaveAmplitude>, Length, 2> exit_copy{exit_range, exit_range};
+    // 焦点面
+    Grid::DynamicRange<Length> focus_range{-0.5 * focus_length, 0.5 * focus_length, detector_pixel_num};
+    Grid::GridVector<Complex<WaveAmplitude>, Length, 2> focus{focus_range, focus_range};
+    // ディテクター面
+    Grid::DynamicRange<Length> detector_range{-0.5 * detector_length, 0.5 * detector_length, detector_pixel_num};
+    Grid::GridVector<Complex<WaveAmplitude>, Length, 2> detector{detector_range, detector_range};
+
+    // 回折積分
+    wavefield::FresnelFFTDiffraction exit_to_focus{exit_copy, focus, lambda};
+    //wavefield::AngularSpectrumDiffraction exit_to_focus{exit_copy, focus, lambda};
+    wavefield::FraunhoferDiffraction focus_to_detector{focus, detector, lambda};
 
     Grid::GridVector<Eigen::Vector3d, Length, 2> nodev_reflect_points{exit_range, exit_range};
 
@@ -87,9 +100,6 @@ int main()
         constexpr double coef_0 = 1.0 - f * f / (a * a);
         constexpr double coef_1 = f * WD / (a * a);
         constexpr double coef_1_sq = coef_1 * coef_1;
-
-        std::cout << exit_radius << std::endl;
-        std::cout << exit_length << std::endl;
 
         for (auto [x, y] : exit.lines()) {
             if (y > 0.0_m or y < x) {  // 対称性
@@ -130,117 +140,69 @@ int main()
             }
 
             nodev_reflect_points.at(x, y) = nodev_reflect_pos;
-            exit.at(x, y) = amp_unit;
+            exit.at(x, y) = std::polar(amp_unit, -k * (x * x + y * y) / (2.0 * WD));
         }
     }
 
     print_field(exit, "nodev_exit.txt");
 
-    Grid::DynamicRange<Length> detector_range{-0.5 * detector_length, 0.5 * detector_length, detector_pixel_num};
-    Grid::GridVector<Complex<WaveAmplitude>, Length, 2> detector{detector_range, detector_range};
-
 
     // 誤差なしの場合の伝播
     std::cout << "propagation from nodev mirror..." << std::endl;
     {
-        Grid::DynamicRange<Length> focus_range{-0.5 * focus_length, 0.5 * focus_length, detector_pixel_num};
-        Grid::GridVector<Complex<WaveAmplitude>, Length, 2> focus{focus_range, focus_range};
-        {
-            fftw_plan plan = fftw_plan_dft_2d(detector_pixel_num, detector_pixel_num,
-                reinterpret_cast<fftw_complex*>(exit.data()), reinterpret_cast<fftw_complex*>(focus.data()), FFTW_FORWARD, FFTW_ESTIMATE);
+        std::copy(std::execution::par_unseq, exit.begin(), exit.end(), exit_copy.begin());
+        exit_to_focus.propagate();
+        print_field(focus, "nodev_focus.txt");
 
-            fftw_execute(plan);
-
-            Grid::fftshift(focus);
-            print_field(focus, "nodev_focus.txt");
-
-
-            fftw_destroy_plan(plan);
-        }
-        {
-            fftw_plan plan = fftw_plan_dft_2d(detector_pixel_num, detector_pixel_num,
-                reinterpret_cast<fftw_complex*>(focus.data()), reinterpret_cast<fftw_complex*>(detector.data()), FFTW_FORWARD, FFTW_ESTIMATE);
-
-            for (auto [x, y, f] : Grid::zip(focus.lines(), focus)) {
-                if (x > 0.0_m) {
-                    f *= 0.0;
-                }
+        for (auto [x, y, f] : Grid::zip(focus.lines(), focus)) {
+            if (x > 0.0_m) {
+                f *= 0.0;
             }
-
-            fftw_execute(plan);
-
-            print_field(detector, "nodev_foucaultgram_focus.txt");
         }
+
+        focus_to_detector.propagate();
+        print_field(detector, "nodev_foucaultgram_focus.txt");
     }
 
-    // デフォーカスを入れた伝播
-    Grid::GridVector<Complex<WaveAmplitude>, Length, 2> exit_defocus{exit_range, exit_range};
-    // 前
+    // 前にデフォーカス
+    focus_range.resize(-0.5 * defocus_front_length, 0.5 * defocus_front_length, detector_pixel_num);
+    focus.resize(focus_range);
     {
-        Grid::DynamicRange<Length> defocus_range{-0.5 * defocus_front_length, 0.5 * defocus_front_length, detector_pixel_num};
-        Grid::GridVector<Complex<WaveAmplitude>, Length, 2> defocus{defocus_range, defocus_range};
-        {
-            for (auto [x, y, e, e_defocus] : Grid::zip(exit.lines(), exit, exit_defocus)) {
-                e_defocus = e * std::polar(1.0, k * (std::hypot(x, y, CD) - std::hypot(x, y, CD - defocus_distance)));
+        std::copy(std::execution::par_unseq, exit.begin(), exit.end(), exit_copy.begin());
+        exit_to_focus.propagate();
+
+        print_field(focus, "nodev_defocus_front.txt");
+
+        for (auto [x, y, f] : Grid::zip(focus.lines(), focus)) {
+            if (x > 0.0_m) {
+                f = 0.0 * amp_unit;
             }
-            fftw_plan plan = fftw_plan_dft_2d(detector_pixel_num, detector_pixel_num,
-                reinterpret_cast<fftw_complex*>(exit_defocus.data()), reinterpret_cast<fftw_complex*>(defocus.data()), FFTW_FORWARD, FFTW_ESTIMATE);
-
-            fftw_execute(plan);
-
-            Grid::fftshift(defocus);
-            print_field(defocus, "nodev_defocus_front.txt");
-            fftw_destroy_plan(plan);
         }
-        {
-            fftw_plan plan = fftw_plan_dft_2d(detector_pixel_num, detector_pixel_num,
-                reinterpret_cast<fftw_complex*>(defocus.data()), reinterpret_cast<fftw_complex*>(detector.data()), FFTW_FORWARD, FFTW_ESTIMATE);
 
-            for (auto [x, y, f] : Grid::zip(defocus.lines(), defocus)) {
-                if (x > 0.0_m) {
-                    f = 0.0 * amp_unit;
-                }
-            }
-
-            fftw_execute(plan);
-
-            print_field(detector, "nodev_foucaultgram_front.txt");
-        }
+        focus_to_detector.propagate();
+        print_field(detector, "nodev_foucaultgram_front.txt");
     }
-    // 後ろ
+    // 後ろにデフォーカス
+    focus_range.resize(-0.5 * defocus_back_length, 0.5 * defocus_back_length, detector_pixel_num);
+    focus.resize(focus_range);
     {
-        Grid::DynamicRange<Length> defocus_range{-0.5 * defocus_back_length, 0.5 * defocus_back_length, detector_pixel_num};
-        Grid::GridVector<Complex<WaveAmplitude>, Length, 2> defocus{defocus_range, defocus_range};
-        {
-            for (auto [x, y, e, e_defocus] : Grid::zip(exit_defocus.lines(), exit, exit_defocus)) {
-                e_defocus = e * std::polar(1.0, k * (std::hypot(x, y, CD) - std::hypot(x, y, CD + defocus_distance)));
+        std::copy(std::execution::par_unseq, exit.begin(), exit.end(), exit_copy.begin());
+        exit_to_focus.propagate();
+
+        print_field(focus, "nodev_defocus_back.txt");
+        for (auto [x, y, f] : Grid::zip(focus.lines(), focus)) {
+            if (x > 0.0_m) {
+                f = 0.0 * amp_unit;
             }
-            fftw_plan plan = fftw_plan_dft_2d(detector_pixel_num, detector_pixel_num,
-                reinterpret_cast<fftw_complex*>(exit_defocus.data()), reinterpret_cast<fftw_complex*>(defocus.data()), FFTW_FORWARD, FFTW_ESTIMATE);
-
-            fftw_execute(plan);
-
-            print_field(defocus, "nodev_defocus_back.txt");
-            fftw_destroy_plan(plan);
         }
-        {
-            fftw_plan plan = fftw_plan_dft_2d(detector_pixel_num, detector_pixel_num,
-                reinterpret_cast<fftw_complex*>(defocus.data()), reinterpret_cast<fftw_complex*>(detector.data()), FFTW_FORWARD, FFTW_ESTIMATE);
-
-            for (auto [x, y, f] : Grid::zip(defocus.lines(), defocus)) {
-                if (x > 0.0_m) {
-                    f = 0.0 * amp_unit;
-                }
-            }
-
-            fftw_execute(plan);
-
-            print_field(detector, "nodev_foucaultgram_back.txt");
-        }
+        focus_to_detector.propagate();
+        print_field(detector, "nodev_foucaultgram_back.txt");
     }
 
     // 誤差を入れてみる
-    constexpr Angle pitch_dev = 1.0_urad;
+    constexpr Angle pitch_dev = 0.00_urad;
+
+    Grid::GridVector<Eigen::Vector3d, Length, 2> dev_reflect_points{exit_range, exit_range};
 
     std::cout << "pitch deviation: " << pitch_dev << std::endl;
 
@@ -257,6 +219,8 @@ int main()
 
         if (x > 0.0_m) {  // 対称性
             exit.at(x, y) = exit.at(-x, y);
+            dev_reflect_points.at(x, y) = dev_reflect_points.at(-x, y);
+            dev_reflect_points.at(x, y)(0) *= -1.0;
             continue;
         }
 
@@ -266,13 +230,9 @@ int main()
         // ミラー外は0
         if (nodev_reflect_points.at(x, y).norm() == 0.0) {
             exit.at(x, y) = 0.0 * amp_unit;
+            dev_reflect_points.at(x, y) = Eigen::Vector3d{0.0, 0.0, 0.0};
             continue;
         }
-
-        if (i++ > 100) {
-            break;
-        }
-
 
         // 誤差なしの時の反射点を初期値に取る
         Eigen::Vector3d reflect_pos = nodev_reflect_points.at(x, y);
@@ -294,133 +254,111 @@ int main()
 
         Length initial_path_length = (double)path_length(theta, phi).val * 1.0_m;
 
+        // 光路長をニュートン法で停留化(最小化)
         dual2nd L;
-        for (int j = 0; j < 500; ++j) {
-            dual2nd sin_theta = sin(theta);
-            dual2nd cos_theta = cos(theta);
-            dual2nd cos_phi = cos(phi);
-            dual2nd sin_phi = sin(phi);
+        double dL_dtheta = 1.0e-10, dL_dphi = 1.0e-10, dL_dtheta_prev, dL_dphi_prev;
+        double d2L_dtheta2, d2L_dphi2;
+        for (int i = 0; i < 2000; ++i) {
+            dual2nd sin_theta = sin(theta), cos_theta = cos(theta);
+            dual2nd cos_phi = cos(phi), sin_phi = sin(phi);
 
             L = path_length(theta, phi);
 
-            double dL_dtheta = derivative(path_length, wrt(theta), forward::at(theta, phi)).val;
-            double d2L_dtheta2 = derivative(path_length, wrt<2>(theta), forward::at(theta, phi));
-            double dL_dphi = derivative(path_length, wrt(phi), forward::at(theta, phi)).val;
-            double d2L_dphi2 = derivative(path_length, wrt<2>(phi), forward::at(theta, phi));
+            dL_dtheta = derivative(path_length, wrt(theta), forward::at(theta, phi)).val;
+            d2L_dtheta2 = derivative(path_length, wrt<2>(theta), forward::at(theta, phi));
+            dL_dphi = derivative(path_length, wrt(phi), forward::at(theta, phi)).val;
+            d2L_dphi2 = derivative(path_length, wrt<2>(phi), forward::at(theta, phi));
 
-            if (std::abs(dL_dtheta) and std::abs(dL_dphi) < 1.0e-7) {
-                break;
-            }
-            if (d2L_dtheta2 == 0.0 and d2L_dphi2 == 0.0) {
+            if (std::abs(dL_dtheta) < 1.0e-7 and std::abs(dL_dphi) < 1.0e-7) {
                 break;
             }
 
-            theta.val -= dL_dtheta / d2L_dtheta2;
-            phi.val -= dL_dphi / d2L_dphi2;
+            if (d2L_dtheta2 != 0.0) {
+                theta -= dL_dtheta / d2L_dtheta2 * (std::signbit(dL_dtheta_prev) != std::signbit(dL_dtheta) ? 0.5 : 1.0);
+            }
+            if (d2L_dphi2) {
+                phi -= dL_dphi / d2L_dphi2 * (std::signbit(dL_dphi_prev) != std::signbit(dL_dphi) ? 0.5 : 1.0);
+            }
 
-            exit.at(x, y) = std::polar(amp_unit, k * ((double)L.val * 1.0_m - initial_path_length));
+            dL_dtheta_prev = dL_dtheta;
+            dL_dphi_prev = dL_dphi;
+        }
+        std::cout << "dL: " << (double)L.val - initial_path_length / 1.0_m << std::endl;
+
+        exit.at(x, y) = std::polar(amp_unit, -k * (x * x + y * y) / (2.0 * WD) + k * ((double)L.val * 1.0_m - initial_path_length));
+        dev_reflect_points.at(x, y) = Eigen::Vector3d{b.value * std::sin((double)theta.val) * cos((double)phi.val), b.value * std::sin((double)theta.val) * sin((double)phi.val), a.value * cos((double)theta.val)};
+    }
+
+    print_field(exit, "dev_exit.txt");
+
+    {
+        std::ofstream file(datadir + "/dev_reflect_points.txt");
+        for (auto& x : dev_reflect_points.line(0)) {
+            for (auto& y : dev_reflect_points.line(1)) {
+                file << x.value << ' ' << y.value << ' '
+                     << dev_reflect_points.at(x, y)(0) << ' '
+                     << dev_reflect_points.at(x, y)(1) << ' '
+                     << dev_reflect_points.at(x, y)(2) << std::endl;
+            }
+            file << std::endl;
         }
     }
 
-    // 誤差アリの場合の伝播
+
+    // 誤差ありの場合の伝播
+    // 焦点
     std::cout << "propagation from dev mirror..." << std::endl;
+
+    focus_range.resize(-0.5 * focus_length, 0.5 * focus_length, detector_pixel_num);
+    focus.resize(focus_range);
     {
-        Grid::DynamicRange<Length> focus_range{-0.5 * focus_length, 0.5 * focus_length, detector_pixel_num};
-        Grid::GridVector<Complex<WaveAmplitude>, Length, 2> focus{focus_range, focus_range};
-        {
-            fftw_plan plan = fftw_plan_dft_2d(detector_pixel_num, detector_pixel_num,
-                reinterpret_cast<fftw_complex*>(exit.data()), reinterpret_cast<fftw_complex*>(focus.data()), FFTW_FORWARD, FFTW_ESTIMATE);
+        std::copy(std::execution::par_unseq, exit.begin(), exit.end(), exit_copy.begin());
+        exit_to_focus.propagate();
+        print_field(focus, "dev_focus.txt");
 
-            fftw_execute(plan);
-
-            Grid::fftshift(focus);
-            print_field(focus, "dev_focus.txt");
-
-
-            fftw_destroy_plan(plan);
-        }
-        {
-            fftw_plan plan = fftw_plan_dft_2d(detector_pixel_num, detector_pixel_num,
-                reinterpret_cast<fftw_complex*>(focus.data()), reinterpret_cast<fftw_complex*>(detector.data()), FFTW_FORWARD, FFTW_ESTIMATE);
-
-            for (auto [x, y, f] : Grid::zip(focus.lines(), focus)) {
-                if (x > 0.0_m) {
-                    f *= 0.0;
-                }
+        for (auto [x, y, f] : Grid::zip(focus.lines(), focus)) {
+            if (x > 0.0_m) {
+                f *= 0.0;
             }
-
-            fftw_execute(plan);
-
-            print_field(detector, "dev_foucaultgram_focus.txt");
         }
+
+        focus_to_detector.propagate();
+        print_field(detector, "dev_foucaultgram_focus.txt");
     }
 
-    // デフォーカスを入れた伝播
-    std::cout << "defocus front" << std::endl;
-    // 前
+    // 前にデフォーカス
+    focus_range.resize(-0.5 * defocus_front_length, 0.5 * defocus_front_length, detector_pixel_num);
+    focus.resize(focus_range);
     {
-        Grid::DynamicRange<Length> defocus_range{-0.5 * defocus_front_length, 0.5 * defocus_front_length, detector_pixel_num};
-        Grid::GridVector<Complex<WaveAmplitude>, Length, 2> defocus{defocus_range, defocus_range};
-        {
-            for (auto [x, y, e, e_defocus] : Grid::zip(exit_defocus.lines(), exit, exit_defocus)) {
-                e_defocus = e * std::polar(1.0, k * (std::hypot(x, y, CD) - std::hypot(x, y, CD - defocus_distance)));
+        std::copy(std::execution::par_unseq, exit.begin(), exit.end(), exit_copy.begin());
+        exit_to_focus.propagate();
+
+        print_field(focus, "dev_defocus_front.txt");
+
+        for (auto [x, y, f] : Grid::zip(focus.lines(), focus)) {
+            if (x > 0.0_m) {
+                f = 0.0 * amp_unit;
             }
-            fftw_plan plan = fftw_plan_dft_2d(detector_pixel_num, detector_pixel_num,
-                reinterpret_cast<fftw_complex*>(exit_defocus.data()), reinterpret_cast<fftw_complex*>(defocus.data()), FFTW_FORWARD, FFTW_ESTIMATE);
-
-            fftw_execute(plan);
-
-            Grid::fftshift(defocus);
-            print_field(defocus, "dev_defocus_front.txt");
-            fftw_destroy_plan(plan);
         }
-        {
-            fftw_plan plan = fftw_plan_dft_2d(detector_pixel_num, detector_pixel_num,
-                reinterpret_cast<fftw_complex*>(defocus.data()), reinterpret_cast<fftw_complex*>(detector.data()), FFTW_FORWARD, FFTW_ESTIMATE);
 
-            for (auto [x, y, f] : Grid::zip(defocus.lines(), defocus)) {
-                if (x > 0.0_m) {
-                    f = 0.0 * amp_unit;
-                }
-            }
-
-            fftw_execute(plan);
-
-            print_field(detector, "dev_foucaultgram_front.txt");
-        }
+        focus_to_detector.propagate();
+        print_field(detector, "dev_foucaultgram_front.txt");
     }
-    std::cout << "defocus back" << std::endl;
-    // 後ろ
+    // 後ろにデフォーカス
+    focus_range.resize(-0.5 * defocus_back_length, 0.5 * defocus_back_length, detector_pixel_num);
+    focus.resize(focus_range);
     {
-        Grid::DynamicRange<Length> defocus_range{-0.5 * defocus_back_length, 0.5 * defocus_back_length, detector_pixel_num};
-        Grid::GridVector<Complex<WaveAmplitude>, Length, 2> defocus{defocus_range, defocus_range};
-        {
-            for (auto [x, y, e] : Grid::zip(exit_defocus.lines(), exit_defocus)) {
-                e *= std::polar(1.0, k * (std::hypot(x, y, CD) - std::hypot(x, y, CD + defocus_distance)));
+        std::copy(std::execution::par_unseq, exit.begin(), exit.end(), exit_copy.begin());
+        exit_to_focus.propagate();
+
+        print_field(focus, "dev_defocus_back.txt");
+        for (auto [x, y, f] : Grid::zip(focus.lines(), focus)) {
+            if (x > 0.0_m) {
+                f = 0.0 * amp_unit;
             }
-            fftw_plan plan = fftw_plan_dft_2d(detector_pixel_num, detector_pixel_num,
-                reinterpret_cast<fftw_complex*>(exit_defocus.data()), reinterpret_cast<fftw_complex*>(defocus.data()), FFTW_FORWARD, FFTW_ESTIMATE);
-
-            fftw_execute(plan);
-
-            Grid::fftshift(defocus);
-            print_field(defocus, "dev_defocus_back.txt");
-            fftw_destroy_plan(plan);
         }
-        {
-            fftw_plan plan = fftw_plan_dft_2d(detector_pixel_num, detector_pixel_num,
-                reinterpret_cast<fftw_complex*>(defocus.data()), reinterpret_cast<fftw_complex*>(detector.data()), FFTW_FORWARD, FFTW_ESTIMATE);
-
-            for (auto [x, y, f] : Grid::zip(defocus.lines(), defocus)) {
-                if (x > 0.0_m) {
-                    f = 0.0 * amp_unit;
-                }
-            }
-
-            fftw_execute(plan);
-
-            print_field(detector, "dev_foucaultgram_back.txt");
-        }
+        focus_to_detector.propagate();
+        print_field(detector, "dev_foucaultgram_back.txt");
     }
 
     fftw_cleanup_threads();
