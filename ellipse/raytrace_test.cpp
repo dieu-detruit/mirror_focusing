@@ -61,6 +61,7 @@ auto ellipse_radius(double z)
     return std::sqrt(a.value * a.value - z * z) * b.value / a.value;
 }
 
+
 int main()
 {
     Grid::parallelize();
@@ -124,26 +125,11 @@ int main()
     std::ofstream mirror_file(datadir + "/mirror.txt");
     std::cout << "calculating exit wavefield" << std::endl;
     {
-        constexpr double coef_0 = 1.0 - f * f / (a * a);
-        constexpr double coef_1 = f * WD / (a * a);
+        constexpr double coef_0 = f * f / (a * a) - 1.0;
+        constexpr double coef_1 = -2.0 * f * WD / (a * a);
         constexpr double coef_1_sq = coef_1 * coef_1;
 
         for (auto [x, y] : exit.lines()) {
-            if (y > 0.0_m or y < x) {  // 対称性
-                if (std::abs(x) < std::abs(y)) {
-                    exit.at(x, y) = exit.at(-std::abs(y), -std::abs(x));
-                    nodev_reflect_points.at(x, y) = nodev_reflect_points.at(-std::abs(y), -std::abs(x));
-                    nodev_reflect_points.at(x, y)(0) *= std::signbit(y) ? -1.0 : 1.0;
-                    nodev_reflect_points.at(x, y)(1) *= std::signbit(x) ? -1.0 : 1.0;
-                } else {
-                    exit.at(x, y) = exit.at(-std::abs(x), -std::abs(y));
-                    nodev_reflect_points.at(x, y) = nodev_reflect_points.at(-std::abs(x), -std::abs(y));
-                    nodev_reflect_points.at(x, y)(0) *= std::signbit(x) ? -1.0 : 1.0;
-                    nodev_reflect_points.at(x, y)(1) *= std::signbit(y) ? -1.0 : 1.0;
-                }
-                continue;
-            }
-
             Length r = std::hypot(x, y);
 
             if (r > exit_radius) {
@@ -155,9 +141,9 @@ int main()
             Angle rotation = std::atan2(y, x);
 
             double coef_2 = WD * WD / (a * a) + r * r / (b * b);
-            double t = (coef_1 + std::sqrt(coef_1_sq + coef_0 * coef_2)) / coef_2;
+            double t = (-coef_1 + std::sqrt(coef_1_sq - 4.0 * coef_0 * coef_2)) / (2.0 * coef_2);
 
-            Eigen::Vector3d nodev_reflect_pos = focus_pos + Eigen::AngleAxisd(rotation, Eigen::Vector3d::UnitZ()).toRotationMatrix() * vectorize(0.0_m, t * r, -t * WD);
+            Eigen::Vector3d nodev_reflect_pos = Eigen::AngleAxisd(rotation, Eigen::Vector3d::UnitZ()).toRotationMatrix() * (focus_pos + t * vectorize(r, 0.0_m, -WD));
 
             if (nodev_reflect_pos(2) * 1.0_m < f - WD - ML or f - WD < nodev_reflect_pos(2) * 1.0_m) {
                 exit.at(x, y) = 0.0 * amp_unit;
@@ -171,7 +157,7 @@ int main()
     }
 
     // 誤差を入れてみる
-    constexpr Angle pitch_dev = 0.001_urad;
+    constexpr Angle pitch_dev = 0.00_urad;
 
     Grid::GridVector<Eigen::Vector3d, Length, 2> dev_reflect_points{exit_range, exit_range};
 
@@ -184,7 +170,6 @@ int main()
     Eigen::Vector3d source_pos_local = rotation_center + dev_rotation_inv * (source_pos - rotation_center);
 
     std::ofstream dev_mirror_file(datadir + "/dev_mirror.txt");
-    std::ofstream optimization(datadir + "/onway.txt");
 
     int count = 0;
     for (auto [x, y] : exit.lines()) {
@@ -206,45 +191,71 @@ int main()
             continue;
         }
 
-        // 光路長をニュートン法で停留化(最小化)
-        auto path_length = [&source_pos_local, &exit_pos_local](VectorXdual2nd u) -> dual2nd {
-            VectorXdual2nd pos(3);
-            dual2nd sin_theta = sin(u(0));
-            pos << b.value * sin_theta * cos(u(1)), b.value * sin_theta * sin(u(1)), a.value * cos(u(0));
-            return (pos - source_pos_local).norm() + (pos - exit_pos_local).norm();
+        // ニュートン法で反射点を求める
+        bool first = true;
+
+        auto exit_deviation = [&source_pos_local, &exit_pos_local, &first](dual theta, dual phi) -> dual {
+            dual sin_theta = sin(theta);
+            VectorXdual pos(3);
+            pos << b.value * sin_theta * cos(phi), b.value * sin_theta * sin(phi), a.value * cos(theta);
+
+            VectorXdual normal(3);
+            normal << pos(0) / (b * b).value, pos(1) / (b * b).value, pos(2) / (a * a).value;
+            normal.normalize();
+
+            VectorXdual incident_dir = source_pos_local - pos;
+            VectorXdual reflection_dir = incident_dir - 2.0 * incident_dir.dot(normal) * normal;
+            dual t = (reflection_dir(2) == 0.0) ? (dual)0.0 : (exit_pos_local(2) - pos(2)) / reflection_dir(2);
+            VectorXdual reflected_exit_pos = pos + t * reflection_dir;
+
+            return (reflected_exit_pos - exit_pos_local).norm();
         };
 
         // 初期値
         Eigen::Vector3d reflect_pos = rotation_center + dev_rotation_inv * (nodev_reflect_points.at(x, y) - rotation_center);
 
-        double initial_cos_theta = reflect_pos(2) / a.value;
-        double initial_sin_theta = std::sqrt(1.0 - initial_cos_theta * initial_cos_theta);
+        dual theta, phi;
+        // (x, y, z) = (b sin(theta)cos(phi), b sin(theta)sin(phi), a cos(theta))
+        theta = std::acos(reflect_pos(2) / a.value);
+        phi = std::atan2(reflect_pos(1), reflect_pos(0));
 
-        VectorXdual2nd angle(2);  // theta, phi
-        angle << std::acos(initial_cos_theta), std::acos(reflect_pos(0) / b.value / initial_sin_theta);
+        Eigen::Vector3d initial_pos{
+            b.value * std::sin((double)theta.val) * std::cos((double)phi.val),
+            b.value * std::sin((double)theta.val) * std::sin((double)phi.val),
+            a.value * std::cos((double)theta.val)};
 
-        Length initial_path_length = (double)path_length(angle).val * 1.0_m;
+        Length initial_path_length = ((reflect_pos - source_pos_local).norm() + (reflect_pos - exit_pos_local).norm()) * 1.0_m;
 
-        dual2nd L;
-        VectorXdual2nd gradL;
-        for (int i = 0; i < 100; ++i) {
-            Eigen::MatrixXd H = hessian(path_length, wrt(angle), at(angle), L, gradL);
+        dual D;
+        for (int i = 0; i < 10; ++i) {
 
-            if (std::fabs((double)gradL(0).val) < 1.0e-5 and std::fabs((double)gradL(1).val) < 1.0e-5) {
+            D = exit_deviation(theta, phi);
+            double dDdt = derivative(exit_deviation, wrt(theta), at(theta, phi));
+            double dDdp = derivative(exit_deviation, wrt(phi), at(theta, phi));
+
+            std::cout << "params: " << theta << ' ' << phi << ' ' << D << ' ' << dDdt << ' ' << dDdp << std::endl;
+
+            if (D.val == 0) {
+                break;
+            }
+            if (std::abs(dDdt) < 1.0e-10 or std::abs(dDdp) < 1.0e-10) {
                 break;
             }
 
-            if (count == 20) {
-                optimization << angle(0) << ' ' << angle(1) << ' ' << L << ' ' << gradL(0).val << ' ' << gradL(1).val << std::endl;
-            }
+            double alpha = dDdt * dDdt / (dDdt * dDdt + dDdp * dDdp);
 
-            angle -= H.inverse() * gradL;
+            std::cout << "alpha: " << alpha << ' ' << alpha / dDdt << ' ' << (1.0 - alpha) / dDdp << std::endl;
+
+            theta -= alpha * D / dDdt;
+            phi -= (1.0 - alpha) * D / dDdp;
         }
 
         Eigen::Vector3d dev_reflect_pos_local{
-            b.value * std::sin((double)angle(0).val) * std::cos((double)angle(1).val),
-            b.value * std::sin((double)angle(0).val) * std::sin((double)angle(1).val),
-            a.value * std::cos((double)angle(0).val)};
+            b.value * std::sin((double)theta.val) * std::cos((double)phi.val),
+            b.value * std::sin((double)theta.val) * std::sin((double)phi.val),
+            a.value * std::cos((double)theta.val)};
+
+        std::cout << "⊿ z: " << reflect_pos(2) - dev_reflect_pos_local(2) << std::endl;
 
         if (dev_reflect_pos_local(2) * 1.0_m < f - WD - ML or f - WD < dev_reflect_pos_local(2) * 1.0_m) {
             exit.at(x, y) = 0.0 * amp_unit;
@@ -252,12 +263,13 @@ int main()
             continue;
         }
 
-        std::cout << "⊿ L: " << (double)L.val - initial_path_length / 1.0_m << std::endl;
-        exit.at(x, y) = std::polar(amp_unit, -k * (x * x + y * y) / (2.0 * WD) + k * ((double)L.val * 1.0_m - initial_path_length));
+        double L = (dev_reflect_pos_local - source_pos_local).norm() + (dev_reflect_pos_local - exit_pos_local).norm();
+
+        //std::cout << "⊿ L: " << L - initial_path_length / 1.0_m << std::endl;
+        exit.at(x, y) = std::polar(amp_unit, -k * (x * x + y * y) / (2.0 * WD) + k * (L * 1.0_m - initial_path_length));
         dev_reflect_points.at(x, y) = rotation_center + dev_rotation * (dev_reflect_pos_local - rotation_center);
 
         dev_mirror_file << dev_reflect_points.at(x, y)(0) << ' ' << dev_reflect_points.at(x, y)(1) << ' ' << dev_reflect_points.at(x, y)(2) << std::endl;
-        ++count;
     }
 
     {
