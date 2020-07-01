@@ -41,7 +41,7 @@ inline constexpr Length detector_length = detector_pixel_size * detector_pixel_n
 inline constexpr Length focus_length = detector_pixel_num * lambda * CD / detector_length;
 inline constexpr std::size_t focus_pixel_num = detector_pixel_num;
 
-inline constexpr Length defocus_distance = 4.0_um;
+inline constexpr Length defocus_distance = 2.0_um;
 inline constexpr Length defocus_front_length = detector_pixel_num * lambda * (CD - defocus_distance) / detector_length;
 inline constexpr Length defocus_back_length = detector_pixel_num * lambda * (CD + defocus_distance) / detector_length;
 

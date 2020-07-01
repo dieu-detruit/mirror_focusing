@@ -37,7 +37,7 @@ foreach(EXEC_NAME ${EXEC_NAMES})
 endforeach()
 
 ## exec for ellipoidal mirror
-set(ELLIPSE_SRC_NAMES simple knifeedge_scan foucault_test hybrid_propagation)
+set(ELLIPSE_SRC_NAMES simple knifeedge_scan foucault_test hybrid_propagation raytrace_test)
 foreach(SRC_NAME ${ELLIPSE_SRC_NAMES})
 
     set(EXEC_NAME "ellipse_${SRC_NAME}")

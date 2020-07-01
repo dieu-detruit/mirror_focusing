@@ -8,26 +8,21 @@
 #include <string>
 #include <vector>
 
-#include <fftw3.h>
-
 #include <Eigen/Core>
 #include <Eigen/Geometry>
+#include <Eigen/LU>
 
 #include <autodiff/forward.hpp>
 #include <autodiff/forward/eigen.hpp>
 
 #include <unit/double.hpp>
-#include <unit/impl/std_overload.hpp>
 
 #include <grid/algorithm.hpp>
 #include <grid/bundle.hpp>
 #include <grid/core.hpp>
 #include <grid/linear.hpp>
 
-#include <wavefield/core.hpp>
-
 #include "constants.hpp"
-
 
 using namespace autodiff;
 using dual2nd = HigherOrderDual<2>;
@@ -68,12 +63,6 @@ auto ellipse_radius(double z)
 
 int main()
 {
-    if (!fftw_init_threads()) {
-        std::cerr << "error at initialization of threads" << std::endl;
-        return 1;
-    }
-    fftw_plan_with_nthreads(4);
-
     Grid::parallelize();
 
     std::filesystem::create_directory(datadir);
@@ -81,26 +70,58 @@ int main()
     // ミラー下流開口
     Grid::DynamicRange<Length> exit_range{-0.5 * exit_length, 0.5 * exit_length, detector_pixel_num};
     Grid::GridVector<Complex<WaveAmplitude>, Length, 2> exit{exit_range, exit_range};
-    Grid::GridVector<Complex<WaveAmplitude>, Length, 2> exit_copy{exit_range, exit_range};
-    // 焦点面
-    Grid::DynamicRange<Length> focus_range{-0.5 * focus_length, 0.5 * focus_length, detector_pixel_num};
-    Grid::GridVector<Complex<WaveAmplitude>, Length, 2> focus{focus_range, focus_range};
-    // ディテクター面
-    Grid::DynamicRange<Length> detector_range{-0.5 * detector_length, 0.5 * detector_length, detector_pixel_num};
-    Grid::GridVector<Complex<WaveAmplitude>, Length, 2> detector{detector_range, detector_range};
-
-    // 回折積分
-    wavefield::FresnelFFTDiffraction exit_to_focus{exit_copy, focus, lambda};
-    //wavefield::AngularSpectrumDiffraction exit_to_focus{exit_copy, focus, lambda};
-    wavefield::FraunhoferDiffraction focus_to_detector{focus, detector, lambda};
 
     Grid::GridVector<Eigen::Vector3d, Length, 2> nodev_reflect_points{exit_range, exit_range};
 
     Eigen::Vector3d source_pos = vectorize(0.0_m, 0.0_m, -f);
     Eigen::Vector3d focus_pos = vectorize(0.0_m, 0.0_m, f);
 
-    std::ofstream mirror_file(datadir + "/mirror.txt");
 
+#if 0
+    std::ofstream optimization_file(datadir + "/optimize.txt");
+
+    // 2次元楕円で実験
+    Eigen::Vector2d source_pos_2d = vectorize(-f, 0.0_m);
+    Eigen::Vector2d exit_pos_2d = vectorize(f - WD, 20.0_mm);
+
+    dual2nd theta = 0.5;
+
+    auto path_length = [&source_pos_2d, &exit_pos_2d](dual2nd theta) -> dual2nd {
+        VectorXdual2nd pos(2);
+        pos << a.value * cos(theta), b.value * sin(theta);
+        return (pos - source_pos_2d).norm() + (pos - exit_pos_2d).norm();
+    };
+
+    // 光路長をニュートン法で停留化(最小化)
+    dual2nd L;
+    double dL_dtheta = 1.0e-10, dL_dtheta_prev;
+    double d2L_dtheta2;
+    for (int i = 0; i < 2000; ++i) {
+        dual2nd sin_theta = sin(theta), cos_theta = cos(theta);
+
+        L = path_length(theta);
+
+        dL_dtheta = derivative(path_length, wrt(theta), forward::at(theta)).val;
+        d2L_dtheta2 = derivative(path_length, wrt<2>(theta), forward::at(theta));
+
+        optimization_file << theta << ' ' << L << ' ' << dL_dtheta << std::endl;
+
+        //if (std::abs(dL_dtheta) < 1.0e-7) {
+        //break;
+        //}
+
+        if (d2L_dtheta2 != 0.0) {
+            theta -= dL_dtheta / d2L_dtheta2 * (std::signbit(dL_dtheta_prev) != std::signbit(dL_dtheta) ? 0.5 : 1.0);
+        }
+
+        dL_dtheta_prev = dL_dtheta;
+    }
+
+    return 0;
+#endif
+
+#if 1
+    std::ofstream mirror_file(datadir + "/mirror.txt");
     std::cout << "calculating exit wavefield" << std::endl;
     {
         constexpr double coef_0 = 1.0 - f * f / (a * a);
@@ -146,67 +167,11 @@ int main()
 
             nodev_reflect_points.at(x, y) = nodev_reflect_pos;
             exit.at(x, y) = std::polar(amp_unit, -k * (x * x + y * y) / (2.0 * WD));
-            mirror_file << nodev_reflect_pos(0) << ' ' << nodev_reflect_pos(1) << ' ' << nodev_reflect_pos(2) << std::endl;
         }
-    }
-
-    print_field(exit, "nodev_exit.txt");
-
-
-    // 誤差なしの場合の伝播
-    std::cout << "propagation from nodev mirror..." << std::endl;
-    {
-        std::copy(std::execution::par_unseq, exit.begin(), exit.end(), exit_copy.begin());
-        exit_to_focus.propagate();
-        print_field(focus, "nodev_focus.txt");
-
-        for (auto [x, y, f] : Grid::zip(focus.lines(), focus)) {
-            if (x > 0.0_m) {
-                f *= 0.0;
-            }
-        }
-
-        focus_to_detector.propagate();
-        print_field(detector, "nodev_foucaultgram_focus.txt");
-    }
-
-    // 前にデフォーカス
-    focus_range.resize(-0.5 * defocus_front_length, 0.5 * defocus_front_length, detector_pixel_num);
-    focus.resize(focus_range);
-    {
-        std::copy(std::execution::par_unseq, exit.begin(), exit.end(), exit_copy.begin());
-        exit_to_focus.propagate();
-
-        print_field(focus, "nodev_defocus_front.txt");
-
-        for (auto [x, y, f] : Grid::zip(focus.lines(), focus)) {
-            if (x > 0.0_m) {
-                f = 0.0 * amp_unit;
-            }
-        }
-
-        focus_to_detector.propagate();
-        print_field(detector, "nodev_foucaultgram_front.txt");
-    }
-    // 後ろにデフォーカス
-    focus_range.resize(-0.5 * defocus_back_length, 0.5 * defocus_back_length, detector_pixel_num);
-    focus.resize(focus_range);
-    {
-        std::copy(std::execution::par_unseq, exit.begin(), exit.end(), exit_copy.begin());
-        exit_to_focus.propagate();
-
-        print_field(focus, "nodev_defocus_back.txt");
-        for (auto [x, y, f] : Grid::zip(focus.lines(), focus)) {
-            if (x > 0.0_m) {
-                f = 0.0 * amp_unit;
-            }
-        }
-        focus_to_detector.propagate();
-        print_field(detector, "nodev_foucaultgram_back.txt");
     }
 
     // 誤差を入れてみる
-    constexpr Angle pitch_dev = 0.00_urad;
+    constexpr Angle pitch_dev = 0.001_urad;
 
     Grid::GridVector<Eigen::Vector3d, Length, 2> dev_reflect_points{exit_range, exit_range};
 
@@ -219,8 +184,9 @@ int main()
     Eigen::Vector3d source_pos_local = rotation_center + dev_rotation_inv * (source_pos - rotation_center);
 
     std::ofstream dev_mirror_file(datadir + "/dev_mirror.txt");
+    std::ofstream optimization(datadir + "/onway.txt");
 
-    int i = 0;
+    int count = 0;
     for (auto [x, y] : exit.lines()) {
 
         if (x > 0.0_m) {  // 対称性
@@ -261,20 +227,24 @@ int main()
 
         dual2nd L;
         VectorXdual2nd gradL;
-        for (int i = 0; i < 20; ++i) {
+        for (int i = 0; i < 100; ++i) {
             Eigen::MatrixXd H = hessian(path_length, wrt(angle), at(angle), L, gradL);
 
             if (std::fabs((double)gradL(0).val) < 1.0e-5 and std::fabs((double)gradL(1).val) < 1.0e-5) {
                 break;
             }
 
+            if (count == 20) {
+                optimization << angle(0) << ' ' << angle(1) << ' ' << L << ' ' << gradL(0).val << ' ' << gradL(1).val << std::endl;
+            }
+
             angle -= H.inverse() * gradL;
         }
 
         Eigen::Vector3d dev_reflect_pos_local{
-            b.value * std::sin((double)angle(1).val) * std::cos((double)angle(0).val),
-            b.value * std::sin((double)angle(1).val) * std::sin((double)angle(0).val),
-            a.value * std::cos((double)angle(1).val)};
+            b.value * std::sin((double)angle(0).val) * std::cos((double)angle(1).val),
+            b.value * std::sin((double)angle(0).val) * std::sin((double)angle(1).val),
+            a.value * std::cos((double)angle(0).val)};
 
         if (dev_reflect_pos_local(2) * 1.0_m < f - WD - ML or f - WD < dev_reflect_pos_local(2) * 1.0_m) {
             exit.at(x, y) = 0.0 * amp_unit;
@@ -287,9 +257,8 @@ int main()
         dev_reflect_points.at(x, y) = rotation_center + dev_rotation * (dev_reflect_pos_local - rotation_center);
 
         dev_mirror_file << dev_reflect_points.at(x, y)(0) << ' ' << dev_reflect_points.at(x, y)(1) << ' ' << dev_reflect_points.at(x, y)(2) << std::endl;
+        ++count;
     }
-
-    print_field(exit, "dev_exit.txt");
 
     {
         std::ofstream file(datadir + "/dev_reflect_points.txt");
@@ -304,63 +273,6 @@ int main()
         }
     }
 
-
-    // 誤差ありの場合の伝播
-    // 焦点
-    std::cout << "propagation from dev mirror..." << std::endl;
-
-    focus_range.resize(-0.5 * focus_length, 0.5 * focus_length, detector_pixel_num);
-    focus.resize(focus_range);
-    {
-        std::copy(std::execution::par_unseq, exit.begin(), exit.end(), exit_copy.begin());
-        exit_to_focus.propagate();
-        print_field(focus, "dev_focus.txt");
-
-        for (auto [x, y, f] : Grid::zip(focus.lines(), focus)) {
-            if (x > 0.0_m) {
-                f *= 0.0;
-            }
-        }
-
-        focus_to_detector.propagate();
-        print_field(detector, "dev_foucaultgram_focus.txt");
-    }
-
-    // 前にデフォーカス
-    focus_range.resize(-0.5 * defocus_front_length, 0.5 * defocus_front_length, detector_pixel_num);
-    focus.resize(focus_range);
-    {
-        std::copy(std::execution::par_unseq, exit.begin(), exit.end(), exit_copy.begin());
-        exit_to_focus.propagate();
-
-        print_field(focus, "dev_defocus_front.txt");
-
-        for (auto [x, y, f] : Grid::zip(focus.lines(), focus)) {
-            if (x > 0.0_m) {
-                f = 0.0 * amp_unit;
-            }
-        }
-
-        focus_to_detector.propagate();
-        print_field(detector, "dev_foucaultgram_front.txt");
-    }
-    // 後ろにデフォーカス
-    focus_range.resize(-0.5 * defocus_back_length, 0.5 * defocus_back_length, detector_pixel_num);
-    focus.resize(focus_range);
-    {
-        std::copy(std::execution::par_unseq, exit.begin(), exit.end(), exit_copy.begin());
-        exit_to_focus.propagate();
-
-        print_field(focus, "dev_defocus_back.txt");
-        for (auto [x, y, f] : Grid::zip(focus.lines(), focus)) {
-            if (x > 0.0_m) {
-                f = 0.0 * amp_unit;
-            }
-        }
-        focus_to_detector.propagate();
-        print_field(detector, "dev_foucaultgram_back.txt");
-    }
-
-    fftw_cleanup_threads();
     return 0;
+#endif
 }
